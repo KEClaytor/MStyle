@@ -1,63 +1,81 @@
 %% Function to evaluate MATLAB code for style
-% styleCheck(file)
-%   Prints all your problems to the screen.
+% styleCheck
+%   Evaluates MATLAB code for style, according to [1].
 % [problems] = styleCheck(file)
-%   Returns a string with your problems in it.
+%   Examines only file for style correctness.
 % [problems] = styleCheck(directory)
-%   Cell array with each element corresponding to a file in the directory.
-%   If the directory contains sub-directories, these will be recursively
-%   searched. The sub-directories will appear as a cell array within the
-%   parent cell array.
+%   Examines all of the *.m files in directory for style correctness.
+% [problems] = styleCheck(directory '-r')
+%   Recursively search through child directories. Note, you should either
+%   give it directories on the path, or specify a full directory path.
+% [problems] = styleCheck(directory, '-v')
+%   Print out problems to the screen (default).
+% [problems] = styleCheck(directory, '-fix')
+%   TODO: Fixes errors in place. Note: This could introduce errors, you
+%   should make sure to run your tests after this.
 %
-% Generally uses the styleguide espoused in "Style Guidelines 2.0":
+% [1] Implements some of "Style Guidelines 2.0":
 %   http://www.mathworks.com/matlabcentral/fileexchange/46056-matlab-style-guidelines-2-0
 %
-% Configured with "styleCheck configure"
+% TODO: Configure with "styleCheck -config"
 
-function [n_err_tot] = styleCheck(target)
-    verbose = true;
+function [eOut] = styleCheck(target, varargin)
+    nVargs = length(varargin);
+    verbose = false;
     recursive = false;
+    for ii = 1:nVargs
+        switch varargin{ii}
+            case '-r'
+                recursive = true;
+            case '-v'
+                verbose = true;
+            otherwise
+                fprintf('Unknown input to styleCheck');
+        end
+    end
     
-    n_err_tot = 0;
+    %% Create output structure
+    % Start counting
+    eOut.Errors = {};
+    eOut.McCabe = [];
+    eOut.TotalErrors = [];
+    
     %% Target handling - directory, vs. file
     % Check to see if we were passed a directory, or a file?
-    if isstruct(target)
-        if length(target) > 1
-            % Check each element in target
-            for ii = 1:length(target)
-                n_err_tot = n_err_tot + styleCheck(target(ii));
-            end
-        else
-            % Single element - are we a directory, or a file?
-            if target.isdir
-                switch target.name
+    % target = dir(input);
+    % returns a directory structure, or a single filename
+    
+    if exist(target, 'dir')
+        curdir = dir(target);
+        % Check each element in target
+        for ii = 1:length(curdir)
+            % Are we a directory? If so do we want recursion?
+            newtarget = fullfile(target, curdir(ii).name);
+            if curdir(ii).isdir
+                switch curdir(ii).name
                     case {'.','..'}
                         % Do nothing
-                        return;
                     otherwise
                         if recursive
-                            n_err_tot = n_err_tot + ...
-                                styleCheck(dir(target.name));
-                        else
-                            return;
+                            eSub = styleCheck(newtarget, varargin{:});
+                            eOut = addSubErrors(eOut, eSub);
                         end
                 end
             else
-                [~, ~, ext] = fileparts(target.name);
+                [~, ~, ext] = fileparts(curdir(ii).name);
                 switch ext
                     case {'.m'}
-                        n_err_tot = n_err_tot + styleCheck(target.name);
-                        return;
+                        eSub = styleCheck(newtarget, varargin{:});
+                        eOut = addSubErrors(eOut, eSub);
                     otherwise
-                        fprintf('Skipping: %s\n', target.name);
-                        return;
+                        fprintf('Skipping: %s\n', curdir(ii).name);
                 end
                 
             end
         end
-    elseif ischar(target)
+    else
         %% Found a file, parse it and get results
-        [~, ~, ext] = fileparts(target);
+        [~, basename, ext] = fileparts(target);
         switch ext
             case {'.m'}
                 % OK - continue.
@@ -66,11 +84,26 @@ function [n_err_tot] = styleCheck(target)
                 fprintf('Tried to scan %s - returning.\n', target)
                 return;
         end
-        
         fprintf('\nEvaluating: %s\n', target)
+        
         % Did we want to run the matlab code checker?
         fprintf('Running MATLAB code checker...\n');
         checkcode(target);
+        %
+        %     if strcmpi(basename, 'lamp');
+        %         disp('pause')
+        %     end
+        
+        % Compute the McCabe complexity
+        ccresult = checkcode(target, '-cyc');
+        mccabe = 0;
+        if ~isempty(ccresult)
+            for ii = 1:length(ccresult)
+                s = ccresult(ii).message;
+                mccabe = mccabe + sum(str2double(regexp(s, '\d*', 'match')));
+            end
+        end
+        fprintf('McCabe Complexity: %d\n', mccabe)
         fprintf('...done.\n');
         
         % Loop through all of our checks
@@ -78,12 +111,12 @@ function [n_err_tot] = styleCheck(target)
         
         % For each line in the file
         fname = target;
-        % fname = 'resort_crosstab.m';
         fid = fopen(fname);
         
         %% Loop through lines and apply the style elements
         line = fgetl(fid);
         lineNum = 1;
+        error_cnts = zeros(1, nsE);
         while ischar(line) || (line ~= -1)
             % Skip blank lines
             if length(line) >= 1
@@ -96,15 +129,15 @@ function [n_err_tot] = styleCheck(target)
                             [errInd] = regexp(line, rule);
                             if ~isempty(errInd)
                                 report(line, lineNum, errInd, sE{ii}.reason, verbose);
-                                n_err_tot = n_err_tot + 1;
+                                error_cnts(ii) = error_cnts(ii) + length(errInd);
                             end
                         else
                             % Apply the rule
                             if sE{ii}.rule(line)
                                 % Currently, the only rule is line length 80.
                                 % TODO: Modify the errInd off of the hardcode value here
-                                report(line, lineNum, [80], sE{ii}.reason, verbose);
-                                n_err_tot = n_err_tot + 1;
+                                report(line, lineNum, 80, sE{ii}.reason, verbose);
+                                error_cnts(ii) = error_cnts(ii) + 1;
                             end
                         end
                     end
@@ -118,23 +151,47 @@ function [n_err_tot] = styleCheck(target)
         % Close the file
         fclose(fid);
         
+        % Add to the error structure
+        eOut.Errors{1}.name = basename;
+        for ii = 1:nsE
+            eOut.Errors{1}.reason{ii} = sE{ii}.reason;
+        end
+        eOut.Errors{1}.counts = error_cnts;
+        eOut.McCabe = mccabe;
+        eOut.TotalErrors = sum(eOut.Errors{1}.counts);
+        
         % Report the tally
-        fprintf('File: %s\n\tErrors found: %d\n', fname, n_err_tot);
+        fprintf('File: %s\n\tErrors found: %d\n', basename, eOut.TotalErrors);
         return;
     end
     
-    fprintf('\n\nTotal errors found: %d\n', n_err_tot);
+    fprintf('\n\n===============SUMMARY===============\n');
+    fprintf('Files analyzed: %d\n', length(eOut.TotalErrors));
+    fprintf('Total errors found: %d\n', sum(eOut.TotalErrors));
+    fprintf('Average McCabe complexity: %4.1f\n', mean(eOut.McCabe));
     
     % List things I don't check for yet
     dispUnchecked()
     
 end
 
+%% Add the recursively returned structure to the next higher level
+function eOut = addSubErrors(eOut, eSub)
+    % Skip if we have the results for a directory?
+    % if ~isstruct(eOut.Errors{1}.filename)
+    % Error structure array
+    eOut.Errors = [eOut.Errors, eSub.Errors];
+    % Total scalar count
+    eOut.McCabe = [eOut.McCabe, eSub.McCabe];
+    eOut.TotalErrors = [eOut.TotalErrors, eSub.TotalErrors];
+    % end
+end
+
 %% Report function
 % Report line number, and what the problem is
 function report(line, lineNum, ind, reason, verbose)
     for ii = 1:length(ind)
-        fprintf('Line %d (%d): %s\n', lineNum, ind(ii), reason);
+        fprintf('L %d (C %d): %s\n', lineNum, ind(ii), reason);
         if verbose
             fprintf('%s\n%s^\n', ...
                 line(1:min([80, length(line)])), ...
