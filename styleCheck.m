@@ -19,61 +19,111 @@ function [n_err_tot] = styleCheck(target)
     recursive = false;
     
     n_err_tot = 0;
-    
-    fprintf('\nEvaluating: %s\n', target)
-    % Did we want to run the matlab code checker?
-    fprintf('Running MATLAB code checker...\n');
-    checkcode(target);
-    fprintf('...done.\n');
-    
-    % Loop through all of our checks
-    [sE, nsE] = getStyleElements();
-    
-    % For each line in the file
-    fname = target;
-    % fname = 'resort_crosstab.m';
-    fid = fopen(fname);
-    
-    %% Loop through lines and apply the style elements
-    line = fgetl(fid);
-    lineNum = 1;
-    while ischar(line) || (line ~= -1)
-        % Skip blank lines
-        if length(line) >= 1
-            % Skip comments
-            if ~strcmp(line(1), '%')
-                for ii = 1:nsE
-                    rule = sE{ii}.rule;
-                    if ischar(rule)
-                        % Rule is a regexp, evaluate it
-                        [errInd] = regexp(line, rule);
-                        if ~isempty(errInd)
-                            report(line, lineNum, errInd, sE{ii}.reason, verbose);
-                            n_err_tot = n_err_tot + 1;
+    %% Target handling - directory, vs. file
+    % Check to see if we were passed a directory, or a file?
+    if isstruct(target)
+        if length(target) > 1
+            % Check each element in target
+            for ii = 1:length(target)
+                n_err_tot = n_err_tot + styleCheck(target(ii));
+            end
+        else
+            % Single element - are we a directory, or a file?
+            if target.isdir
+                switch target.name
+                    case {'.','..'}
+                        % Do nothing
+                        return;
+                    otherwise
+                        if recursive
+                            n_err_tot = n_err_tot + ...
+                                styleCheck(dir(target.name));
+                        else
+                            return;
                         end
-                    else
-                        % Apply the rule
-                        if sE{ii}.rule(line)
-                            % Currently, the only rule is line length 80.
-                            % TODO: Modify the errInd off of the hardcode value here
-                            report(line, lineNum, [80], sE{ii}.reason, verbose);
-                            n_err_tot = n_err_tot + 1;
+                end
+            else
+                [~, ~, ext] = fileparts(target.name);
+                switch ext
+                    case {'.m'}
+                        n_err_tot = n_err_tot + styleCheck(target.name);
+                        return;
+                    otherwise
+                        fprintf('Skipping: %s\n', target.name);
+                        return;
+                end
+                
+            end
+        end
+    elseif ischar(target)
+        %% Found a file, parse it and get results
+        [~, ~, ext] = fileparts(target);
+        switch ext
+            case {'.m'}
+                % OK - continue.
+            otherwise
+                % How'd we get here? Inform, but don't eval and then return.
+                fprintf('Tried to scan %s - returning.\n', target)
+                return;
+        end
+        
+        fprintf('\nEvaluating: %s\n', target)
+        % Did we want to run the matlab code checker?
+        fprintf('Running MATLAB code checker...\n');
+        checkcode(target);
+        fprintf('...done.\n');
+        
+        % Loop through all of our checks
+        [sE, nsE] = getStyleElements();
+        
+        % For each line in the file
+        fname = target;
+        % fname = 'resort_crosstab.m';
+        fid = fopen(fname);
+        
+        %% Loop through lines and apply the style elements
+        line = fgetl(fid);
+        lineNum = 1;
+        while ischar(line) || (line ~= -1)
+            % Skip blank lines
+            if length(line) >= 1
+                % Skip comments
+                if ~strcmp(line(1), '%')
+                    for ii = 1:nsE
+                        rule = sE{ii}.rule;
+                        if ischar(rule)
+                            % Rule is a regexp, evaluate it
+                            [errInd] = regexp(line, rule);
+                            if ~isempty(errInd)
+                                report(line, lineNum, errInd, sE{ii}.reason, verbose);
+                                n_err_tot = n_err_tot + 1;
+                            end
+                        else
+                            % Apply the rule
+                            if sE{ii}.rule(line)
+                                % Currently, the only rule is line length 80.
+                                % TODO: Modify the errInd off of the hardcode value here
+                                report(line, lineNum, [80], sE{ii}.reason, verbose);
+                                n_err_tot = n_err_tot + 1;
+                            end
                         end
                     end
                 end
             end
+            % Get the next line
+            line = fgetl(fid);
+            lineNum = lineNum + 1;
         end
-        % Get the next line
-        line = fgetl(fid);
-        lineNum = lineNum + 1;
+        % and report any problems we've found
+        % Close the file
+        fclose(fid);
+        
+        % Report the tally
+        fprintf('File: %s\n\tErrors found: %d\n', fname, n_err_tot);
+        return;
     end
-    % and report any problems we've found
-    % Close the file
-    fclose(fid);
     
-    % Report the tally
-    fprintf('File: %s\n\tErrors found: %d\n', fname, n_err_tot);
-    return;
+    fprintf('\n\nTotal errors found: %d\n', n_err_tot);
     
     % List things I don't check for yet
     dispUnchecked()
