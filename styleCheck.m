@@ -121,7 +121,7 @@ function [eOut] = styleCheck(target, varargin)
             % Skip blank lines
             if length(line) >= 1
                 % Skip comments
-                if ~strcmp(line(1), '%')
+                if regexp(line, '\s+%') == 1;
                     for ii = 1:nsE
                         rule = sE{ii}.rule;
                         if ischar(rule)
@@ -207,11 +207,6 @@ function [sE, ii] = getStyleElements()
     sE = cell(1);
     ii = 1;
     
-    % Missing left space
-    sE{ii}.rule = @(x) length(x)>80;
-    sE{ii}.replacement = @(x) x;
-    sE{ii}.reason = 'Lines should not exceed 80 characters.';
-    ii = ii + 1;
     
     % Note the first bit of each:
     
@@ -242,6 +237,12 @@ function [sE, ii] = getStyleElements()
     % Check for a comment header to the file
     % Check for left hand zeros
     % Check that i/j are not being used as loop variables (suggest ii, jj)
+    
+    % Lines are too long
+    sE{ii}.rule = @(x) length(x)>80;
+    sE{ii}.replacement = @(x) x;
+    sE{ii}.reason = 'Lines should not exceed 80 characters.';
+    ii = ii + 1;
 end
 
 %% List of things not yet checked for:
