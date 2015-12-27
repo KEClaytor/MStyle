@@ -11,11 +11,15 @@
 % [problems] = styleCheck(directory, '-v')
 %   Print out problems to the screen (default).
 % [problems] = styleCheck(directory, '-fix')
-%   TODO: Fixes errors in place. Note: This could introduce errors, you
-%   should make sure to run your tests after this.
+%   Automatically fixes errors in place.
+%   Use with the -v flag to manually approve each of the suggested fixes.
+%   Note: This could introduce errors, you should make sure to run your
+%   tests after this.
 %
-% [1] Implements some of "Style Guidelines 2.0":
+% [1] Implements **some** of "Style Guidelines 2.0":
 %   http://www.mathworks.com/matlabcentral/fileexchange/46056-matlab-style-guidelines-2-0
+% [2] Requires: getkey from the FEX:
+%   http://www.mathworks.com/matlabcentral/fileexchange/7465-getkey
 %
 % TODO: Configure with "styleCheck -config"
 
@@ -23,12 +27,15 @@ function [eOut] = styleCheck(target, varargin)
     nVargs = length(varargin);
     verbose = false;
     recursive = false;
+    fix = false;
     for ii = 1:nVargs
         switch varargin{ii}
             case '-r'
                 recursive = true;
             case '-v'
                 verbose = true;
+            case '-fix'
+                fix = true;
             otherwise
                 fprintf('Unknown input to styleCheck');
         end
@@ -39,6 +46,7 @@ function [eOut] = styleCheck(target, varargin)
     eOut.Errors = {};
     eOut.McCabe = [];
     eOut.TotalErrors = [];
+    eOut.TotalFixes = [];
     
     %% Target handling - directory, vs. file
     % Check to see if we were passed a directory, or a file?
@@ -89,10 +97,6 @@ function [eOut] = styleCheck(target, varargin)
         % Did we want to run the matlab code checker?
         fprintf('Running MATLAB code checker...\n');
         checkcode(target);
-        %
-        %     if strcmpi(basename, 'lamp');
-        %         disp('pause')
-        %     end
         
         % Compute the McCabe complexity
         ccresult = checkcode(target, '-cyc');
@@ -109,26 +113,42 @@ function [eOut] = styleCheck(target, varargin)
         % Loop through all of our checks
         [sE, nsE] = getStyleElements();
         
+        %% Now load the files
         % For each line in the file
         fname = target;
         fid = fopen(fname);
-        
+        if fix
+            fname_out = [target, '.tmp'];
+            fid_out = fopen(fname_out, 'w+');
+        end
         %% Loop through lines and apply the style elements
         line = fgetl(fid);
         lineNum = 1;
         error_cnts = zeros(1, nsE);
+        fix_cnts = zeros(1, nsE);
         while ischar(line) || (line ~= -1)
-            % Skip blank lines
+            % Don't analyze blank lines
             if length(line) >= 1
-                % Skip comments
-                if regexp(line, '\s+%') == 1;
+                if regexp(line, '\s*%', 'once');
+                    % Don't analyze comments
+                else
                     for ii = 1:nsE
                         rule = sE{ii}.rule;
                         if ischar(rule)
                             % Rule is a regexp, evaluate it
+                            % These are incidentally only the ones we know how
+                            %   to run replacement rules for.
                             [errInd] = regexp(line, rule);
                             if ~isempty(errInd)
-                                report(line, lineNum, errInd, sE{ii}.reason, verbose);
+                                if fix
+                                    [line, fixed] = report_fix(line, lineNum, errInd, sE{ii}, verbose);
+                                    if fixed
+                                        fix_cnts(ii) = fix_cnts(ii) + length(errInd);
+                                    end
+                                else
+                                    % Just report
+                                    report(line, lineNum, errInd, sE{ii}.reason, verbose);
+                                end
                                 error_cnts(ii) = error_cnts(ii) + length(errInd);
                             end
                         else
@@ -143,6 +163,11 @@ function [eOut] = styleCheck(target, varargin)
                     end
                 end
             end
+            % If we're fixing write out the line
+            if fix
+                fprintf(fid_out, '%s\n', line);     % Write to file
+                fprintf('%d\t%s\n', lineNum, line); % Report to the screen
+            end
             % Get the next line
             line = fgetl(fid);
             lineNum = lineNum + 1;
@@ -150,6 +175,15 @@ function [eOut] = styleCheck(target, varargin)
         % and report any problems we've found
         % Close the file
         fclose(fid);
+        if fix
+            % And the temporary file
+            fclose(fid_out);
+            % Replace the original with the temp file and delte the temp
+            [s, m, ~] = movefile(fname_out, fname);
+            if s == 0
+                fprintf(m);
+            end
+        end
         
         % Add to the error structure
         eOut.Errors{1}.name = basename;
@@ -157,17 +191,21 @@ function [eOut] = styleCheck(target, varargin)
             eOut.Errors{1}.reason{ii} = sE{ii}.reason;
         end
         eOut.Errors{1}.counts = error_cnts;
+        eOut.Errors{1}.fixes = fix_cnts;
         eOut.McCabe = mccabe;
         eOut.TotalErrors = sum(eOut.Errors{1}.counts);
+        eOut.TotalFixes = sum(eOut.Errors{1}.fixes);
         
         % Report the tally
-        fprintf('File: %s\n\tErrors found: %d\n', basename, eOut.TotalErrors);
+        fprintf('File: %s\n\tErrors found: %d\n', ...
+            basename, eOut.TotalErrors);
         return;
     end
     
     fprintf('\n\n===============SUMMARY===============\n');
     fprintf('Files analyzed: %d\n', length(eOut.TotalErrors));
     fprintf('Total errors found: %d\n', sum(eOut.TotalErrors));
+    fprintf('Total errors fixed: %d\n', sum(eOut.TotalFixes));
     fprintf('Average McCabe complexity: %4.1f\n', mean(eOut.McCabe));
     
     % List things I don't check for yet
@@ -177,26 +215,61 @@ end
 
 %% Add the recursively returned structure to the next higher level
 function eOut = addSubErrors(eOut, eSub)
-    % Skip if we have the results for a directory?
-    % if ~isstruct(eOut.Errors{1}.filename)
     % Error structure array
     eOut.Errors = [eOut.Errors, eSub.Errors];
     % Total scalar count
     eOut.McCabe = [eOut.McCabe, eSub.McCabe];
     eOut.TotalErrors = [eOut.TotalErrors, eSub.TotalErrors];
-    % end
+    eOut.TotalFixes = [eOut.TotalFixes, eSub.TotalFixes];
 end
 
-%% Report function
+%% Report functions
 % Report line number, and what the problem is
-function report(line, lineNum, ind, reason, verbose)
-    for ii = 1:length(ind)
-        fprintf('L %d (C %d): %s\n', lineNum, ind(ii), reason);
-        if verbose
-            fprintf('%s\n%s^\n', ...
-                line(1:min([80, length(line)])), ...
-                repmat('-', [1, ind(ii)-1]));
+function report(line, lineNum, inds, reason, verbose)
+    indstr = sprintf('%d,', inds);
+    fprintf('L %d (C [%s]): %s\n', lineNum, indstr(1:end-1), reason);
+    if verbose
+        fprintf('%s\n%s\n', ...
+            line(1:min([80, length(line)])), ...
+            make_error_string(inds));
+    end
+end
+
+% Report line number, and what the problem is
+function [line, fixed] = report_fix(line, lineNum, inds, se, verbose)
+    % Get the fixed line
+    newline = regexprep(line, se.rule, se.replacement);
+    % Report and wait for user input
+    indstr = sprintf('%d,', inds);
+    fprintf('Replace Line [y/{n}] %d (C [%s]): %s\n', ...
+        lineNum, indstr(1:end-1), se.reason);
+    fprintf('%s\n%s\n', ...
+        line(1:min([80, length(line)])), ...
+        make_error_string(inds));
+    fprintf('%s\n', newline);
+    
+    fixed = false;
+    if verbose
+        % Ask for permission
+        k = getkey();
+        if k == 121 % ='y'
+            fixed = true;
         end
+    else
+        % Otherwise just replace
+        fixed = true;
+    end
+    if fixed
+        line = newline;
+        fprintf('Line replaced.\n');
+    end
+end
+
+function echar = make_error_string(ind)
+    echar = sprintf('%s^', repmat('-', [1, ind(1)]));
+    for ii = 2:length(ind)
+        echar = [echar,...
+            sprintf('%s^', repmat('-', [1, ind(ii)-ind(ii-1)-1]))];	%#ok
     end
 end
 
@@ -207,6 +280,11 @@ function [sE, ii] = getStyleElements()
     sE = cell(1);
     ii = 1;
     
+    % Missing left space
+    sE{ii}.rule = @(x) length(x)>80;
+    sE{ii}.replacement = @(x) x;
+    sE{ii}.reason = 'Lines should not exceed 80 characters.';
+    ii = ii + 1;
     
     % Note the first bit of each:
     
@@ -237,12 +315,6 @@ function [sE, ii] = getStyleElements()
     % Check for a comment header to the file
     % Check for left hand zeros
     % Check that i/j are not being used as loop variables (suggest ii, jj)
-    
-    % Lines are too long
-    sE{ii}.rule = @(x) length(x)>80;
-    sE{ii}.replacement = @(x) x;
-    sE{ii}.reason = 'Lines should not exceed 80 characters.';
-    ii = ii + 1;
 end
 
 %% List of things not yet checked for:
