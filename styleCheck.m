@@ -121,6 +121,7 @@ function [eOut] = styleCheck(target, varargin)
             fname_out = [target, '.tmp'];
             fid_out = fopen(fname_out, 'w+');
         end
+        
         %% Loop through lines and apply the style elements
         line = fgetl(fid);
         lineNum = 1;
@@ -129,7 +130,7 @@ function [eOut] = styleCheck(target, varargin)
         while ischar(line) || (line ~= -1)
             % Don't analyze blank lines
             if length(line) >= 1
-                if regexp(line, '\s*%', 'once');
+                if regexp(line, '\s*%', 'once') == 1
                     % Don't analyze comments
                 else
                     for ii = 1:nsE
@@ -266,7 +267,7 @@ function [line, fixed] = report_fix(line, lineNum, inds, se, verbose)
 end
 
 function echar = make_error_string(ind)
-    echar = sprintf('%s^', repmat('-', [1, ind(1)]));
+    echar = sprintf('%s^', repmat('-', [1, ind(1)-1]));
     for ii = 2:length(ind)
         echar = [echar,...
             sprintf('%s^', repmat('-', [1, ind(ii)-ind(ii-1)-1]))];	%#ok
@@ -290,19 +291,19 @@ function [sE, ii] = getStyleElements()
     
     % Whitespace around comparisons (=, >=, etc), commas, logical operators.
     % Missing left space
-    sE{ii}.rule = '(?<=[\w\]])(?<ls>[~&|<>=]*)';
+    sE{ii}.rule = '(?<=[\w\]\)\''])(?<ls>[~&|<>=]*)';
     sE{ii}.replacement = ' $<ls>';
     sE{ii}.reason = 'Comparisons should begin with whitespace.';
     ii = ii + 1;
     % Missing right space - include commas in this
-    sE{ii}.rule = '(?<rs>[&|<>=]*)(?=[\w\[\]])';
+    sE{ii}.rule = '(?<rs>[&|<>=]*)(?=[\w\[\]\(\)\''])';
     sE{ii}.replacement = '$<rs> ';
     sE{ii}.reason = 'Comparisons should end with whitespace.';
     ii = ii + 1;
     % Missing dual space is covered by applying left or right spaces
     
     % Missing right space after comma
-    sE{ii}.rule = '(?<rs>[,])(?=[\w\[\]])';
+    sE{ii}.rule = '(?<rs>[,])(?=[\w\[\]\(\)\''])';
     sE{ii}.replacement = '$<rs> ';
     sE{ii}.reason = 'Commas should be followed by whitespace.';
     ii = ii + 1;
